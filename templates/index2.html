@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Admin Dashboard</title>
+<style>
+body{
+background:#111827;
+color:white;
+font-family:Arial;
+padding:20px;
+}
+table{
+width:100%;
+border-collapse:collapse;
+}
+th,td{
+border:1px solid #3b82f6;
+padding:10px;
+}
+img{
+max-width:150px;
+}
+</style>
+</head>
+<body>
+<h1>ADMIN DASHBOARD</h1>
+<table>
+<tr>
+<th>ID</th>
+<th>IP</th>
+<th>Дата</th>
+<th>Имя</th>
+<th>Сообщение</th>
+<th>Фото</th>
+</tr>
+{% for msg in messages %}
+<tr>
+<td>{{ msg[0] }}</td>
+<td>{{ msg[1] }}</td>
+<td>{{ msg[2] }}</td>
+<td>{{ msg[3] }}</td>
+<td>{{ msg[4] }}</td>
+<td>{% if msg[5] %}<img src="{{ msg[5] }}">{% endif %}</td>
+</tr>
+{% endfor %}
+</table>
+</body>
+</html>
