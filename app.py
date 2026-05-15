@@ -1,98 +1,169 @@
+
 from flask import Flask, render_template, request, redirect, session
-import sqlite3
-import hashlib
+from cryptography.fernet import Fernet
+from functools import wraps
 from datetime import datetime
+import hashlib
+import json
+import uuid
+import os
 
 app = Flask(__name__)
 app.secret_key = "secret_key"
 
-DB_NAME = "messages.db"
+DATA_FILE = "data.txt"
+PASS_FILE = "pass.txt"
 
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ip TEXT,
-        date TEXT,
-        name TEXT,
-        message TEXT,
-        photo TEXT
-    )
-    ''')
-    conn.commit()
-    conn.close()
+SECRET_KEY = b"6OLg-wRZtaxYEzffKY0ahPz_6q3_WQjAkk_J8HWQhnQ="
+fernet = Fernet(SECRET_KEY)
 
-init_db()
-
-def get_hash():
-    with open("pass.txt","r") as f:
+def get_password():
+    with open(PASS_FILE, "r") as f:
         return f.read().strip()
 
-@app.route("/", methods=["GET","POST"])
+def admin_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("admin"):
+            return redirect("/admin")
+        return f(*args, **kwargs)
+    return wrapper
+
+def load_messages():
+
+    messages = []
+
+    if not os.path.exists(DATA_FILE):
+        return messages
+
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    for line in lines:
+
+        try:
+            data = json.loads(line.strip())
+
+            try:
+                decrypted = fernet.decrypt(
+                    data["message"].encode()
+                ).decode()
+            except:
+                decrypted = data["message"]
+
+            messages.append({
+                "id": data["id"],
+                "name": data["name"],
+                "message": decrypted,
+                "photo": data["photo"],
+                "date": data["date"],
+                "ip": data["ip"]
+            })
+
+        except Exception as e:
+            print(e)
+
+    return messages[::-1]
+
+def save_message(name, message, photo, ip):
+
+    encrypted = fernet.encrypt(
+        message.encode()
+    ).decode()
+
+    data = {
+        "id": str(uuid.uuid4()),
+        "name": name,
+        "message": encrypted,
+        "photo": photo,
+        "date": datetime.now().strftime("%d.%m.%Y %H:%M"),
+        "ip": ip
+    }
+
+    with open(DATA_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(data, ensure_ascii=False) + "\n")
+
+@app.route("/", methods=["GET", "POST"])
 def index():
+
+    success = False
+
     if request.method == "POST":
-        ip = request.remote_addr
-        today = datetime.now().strftime("%Y-%m-%d")
 
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-
-        c.execute("SELECT COUNT(*) FROM messages WHERE ip=? AND date LIKE ?", (ip, f"{today}%"))
-        count = c.fetchone()[0]
-
-        if count >= 3:
-            conn.close()
-            return render_template("index.html", error="Лимит 3 сообщения в сутки!")
-
-        name = request.form["name"]
-        message = request.form["message"]
-        photo = request.form["photo"]
-
-        date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        c.execute(
-            "INSERT INTO messages (ip,date,name,message,photo) VALUES (?,?,?,?,?)",
-            (ip,date,name,message,photo)
+        save_message(
+            request.form.get("name"),
+            request.form.get("message"),
+            request.form.get("photo"),
+            request.remote_addr
         )
 
-        conn.commit()
-        conn.close()
+        success = True
 
-        return render_template("index.html", success=True)
+    return render_template(
+        "index.html",
+        success=success
+    )
 
-    return render_template("index.html")
-
-@app.route("/admin", methods=["GET","POST"])
+@app.route("/admin", methods=["GET", "POST"])
 def admin():
+
+    error = None
+
     if request.method == "POST":
-        password = request.form["password"]
-        hashed = hashlib.sha256(password.encode()).hexdigest()
 
-        if hashed == get_hash():
+        password = request.form.get("password")
+
+        hashed = hashlib.sha256(
+            password.encode()
+        ).hexdigest()
+
+        if hashed == get_password():
+
             session["admin"] = True
-            return redirect("/dashboard")
 
-    return '''
-    <form method="POST">
-    <input type="password" name="password" placeholder="Password">
-    <button type="submit">Login</button>
-    </form>
-    '''
+        else:
+            error = "Неверный пароль"
 
-@app.route("/dashboard")
-def dashboard():
-    if not session.get("admin"):
-        return redirect("/admin")
+    messages = []
 
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT * FROM messages ORDER BY id DESC")
-    messages = c.fetchall()
-    conn.close()
+    if session.get("admin"):
+        messages = load_messages()
 
-    return render_template("index2.html", messages=messages)
+    return render_template(
+        "index2.html",
+        messages=messages,
+        error=error
+    )
+
+@app.route("/delete/<message_id>", methods=["POST"])
+@admin_required
+def delete_message(message_id):
+
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    new_lines = []
+
+    for line in lines:
+
+        try:
+            data = json.loads(line.strip())
+
+            if data["id"] != message_id:
+                new_lines.append(line)
+
+        except:
+            continue
+
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+    return redirect("/admin")
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/admin")
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)
